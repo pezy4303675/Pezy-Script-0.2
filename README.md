@@ -1,19 +1,6 @@
---[[
-    ╔════════════════════════════════════════════════════════╗
-    ║         FPS PANEL PRO - ESP BOX 2D + AIMBOT FF       ║
-    ║     ESP com Boxes 2D + Linhas + Aimbot Free Fire      ║
-    ╚════════════════════════════════════════════════════════╝
-    
-    ✅ ESP BOX 2D (Linhas ao redor do corpo)
-    ✅ AIMBOT ESTILO FREE FIRE (Gruda na cabeça)
-    ✅ Linhas tracejadas conectando você aos inimigos
-    ✅ Interface moderna e bonita
-]]
-
 repeat task.wait() until game:IsLoaded()
 task.wait(1)
 
--- ==================== SERVICES ====================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -21,28 +8,21 @@ local Workspace = game:GetService("Workspace")
 local Camera = Workspace.CurrentCamera
 
 local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
 
--- ==================== CONFIG ====================
 local Config = {
-    -- 🎯 AIMBOT FREE FIRE STYLE (AUTOMÁTICO)
     AimbotEnabled = true,
-    AutoAim = true, -- Aimbot automático (não precisa apertar nada!)
+    AimbotKey = Enum.UserInputType.MouseButton2,
     SmoothAim = true,
-    Smoothness = 0.25, -- Quanto menor, mais suave (0.05 = muito suave, 0.5 = rápido)
-    SnapSpeed = 1.0, -- Velocidade do snap (0.1 = lento, 1.0 = instantâneo)
-    TargetPart = "Head",
-    FOVSize = 200,
+    Smoothness = 8,
+    AimPart = "Head",
+    FOVSize = 150,
     FOVVisible = true,
     TeamCheck = true,
     WallCheck = false,
     Prediction = true,
-    PredictionStrength = 0.12,
-    VisibleOnly = false,
-    StickToTarget = true, -- Continua grudado no alvo
-    MaxAimbotDistance = 500, -- Distância máxima do aimbot (studs)
+    PredictionAmount = 0.165,
+    AimbotMaxDistance = 500,
     
-    -- 👁️ ESP BOX 2D
     ESPEnabled = true,
     ESPBoxes = true,
     ESPTracers = true,
@@ -52,19 +32,18 @@ local Config = {
     ESPHealthBar = true,
     BoxColor = Color3.fromRGB(255, 0, 0),
     BoxThickness = 2,
-    TracerOrigin = "Bottom", -- "Bottom", "Middle", "Top"
-    MaxESPDistance = 1000, -- Distância máxima do ESP (studs)
+    TracerOrigin = "Bottom",
+    ESPMaxDistance = 1000,
 }
 
--- ==================== STATE ====================
 local State = {
     AimbotActive = false,
     CurrentTarget = nil,
     ESPDrawings = {},
     FOVCircle = nil,
+    MouseDown = false,
 }
 
--- ==================== UTILITY ====================
 local function IsAlive(player)
     if not player or not player.Character then return false end
     local hum = player.Character:FindFirstChildOfClass("Humanoid")
@@ -76,16 +55,31 @@ local function IsTeammate(player)
     return player.Team == LocalPlayer.Team and player.Team ~= nil
 end
 
+local function GetDistance(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
 local function IsVisible(targetPart)
     if not Config.WallCheck then return true end
     
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
     local origin = Camera.CFrame.Position
-    local direction = (targetPart.Position - origin)
+    local direction = (targetPart.Position - origin).Unit * 500
     
-    local ray = Ray.new(origin, direction)
-    local hit, pos = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character, Camera})
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {char, Camera}
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.IgnoreWater = true
     
-    return hit and hit:IsDescendantOf(targetPart.Parent)
+    local result = Workspace:Raycast(origin, direction, rayParams)
+    
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+    
+    return true
 end
 
 local function WorldToScreen(pos)
@@ -93,42 +87,28 @@ local function WorldToScreen(pos)
     return Vector2.new(screenPos.X, screenPos.Y), onScreen, screenPos.Z
 end
 
--- ==================== FOV CIRCLE (Drawing API) ====================
-local function CreateFOVCircle()
-    local circle = Drawing.new("Circle")
-    circle.Thickness = 2
-    circle.NumSides = 64
-    circle.Radius = Config.FOVSize
-    circle.Filled = false
-    circle.Transparency = 1
-    circle.Color = Color3.new(1, 1, 1)
-    circle.Visible = Config.FOVVisible
-    circle.ZIndex = 1000
-    
-    State.FOVCircle = circle
-    
-    RunService.RenderStepped:Connect(function()
-        if State.FOVCircle then
-            circle.Position = UserInputService:GetMouseLocation()
-            circle.Radius = Config.FOVSize
-            circle.Visible = Config.FOVVisible and Config.AimbotEnabled
-            
-            if State.CurrentTarget and Config.AutoAim then
-                circle.Color = Color3.new(0, 1, 0) -- Verde quando travado
-                circle.Thickness = 3
-            else
-                circle.Color = Color3.new(1, 1, 1) -- Branco normal
-                circle.Thickness = 2
-            end
-        end
-    end)
-end
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 2
+FOVCircle.NumSides = 100
+FOVCircle.Radius = Config.FOVSize
+FOVCircle.Filled = false
+FOVCircle.Transparency = 1
+FOVCircle.Color = Color3.new(1, 1, 1)
+FOVCircle.Visible = Config.FOVVisible
+FOVCircle.ZIndex = 999
 
--- ==================== AIMBOT ESTILO FREE FIRE (AUTOMÁTICO) ====================
-local function GetClosestPlayerInFOV()
+State.FOVCircle = FOVCircle
+
+local function GetClosestPlayerToMouse()
     local closest = nil
-    local shortestDist = Config.FOVSize
+    local shortestDistance = math.huge
     local mousePos = UserInputService:GetMouseLocation()
+    
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return nil
+    end
+    
+    local myPos = LocalPlayer.Character.HumanoidRootPart.Position
     
     for _, player in pairs(Players:GetPlayers()) do
         if player == LocalPlayer then continue end
@@ -138,125 +118,100 @@ local function GetClosestPlayerInFOV()
         local char = player.Character
         if not char then continue end
         
-        local head = char:FindFirstChild("Head")
-        if not head then continue end
+        local targetPart = char:FindFirstChild(Config.AimPart)
+        if not targetPart then continue end
         
-        -- Verificar distância ANTES de processar
-        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            local distance3D = (LocalPlayer.Character.HumanoidRootPart.Position - head.Position).Magnitude
-            if distance3D > Config.MaxAimbotDistance then continue end
-        end
+        local worldDistance = GetDistance(myPos, targetPart.Position)
+        if worldDistance > Config.AimbotMaxDistance then continue end
         
-        local screenPos, onScreen = WorldToScreen(head.Position)
+        local screenPos, onScreen = WorldToScreen(targetPart.Position)
         if not onScreen then continue end
         
-        if Config.WallCheck and not IsVisible(head) then continue end
+        if Config.WallCheck and not IsVisible(targetPart) then continue end
         
-        local dist = (screenPos - mousePos).Magnitude
+        local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
         
-        if dist < shortestDist then
+        if distance < Config.FOVSize and distance < shortestDistance then
             closest = player
-            shortestDist = dist
+            shortestDistance = distance
         end
     end
     
     return closest
 end
 
-local function SmoothAimAt(targetPos)
-    if not Config.SmoothAim then
-        -- Snap instantâneo
-        Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
-        return
+local function AimbotLogic()
+    if not Config.AimbotEnabled then return end
+    if not State.MouseDown then 
+        State.CurrentTarget = nil
+        return 
     end
     
-    -- Smooth aim estilo Free Fire
-    local camPos = Camera.CFrame.Position
-    local targetCFrame = CFrame.new(camPos, targetPos)
+    local target = GetClosestPlayerToMouse()
     
-    -- Lerp suave (quanto maior o valor, mais rápido)
-    Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, Config.Smoothness)
-end
-
-local function AimbotLoop()
-    if not Config.AimbotEnabled then return end
-    
-    if Config.AutoAim then
-        -- AIMBOT AUTOMÁTICO - NÃO PRECISA APERTAR NADA!
-        local target = GetClosestPlayerInFOV()
+    if target and IsAlive(target) then
+        State.CurrentTarget = target
         
-        if target and IsAlive(target) then
-            State.CurrentTarget = target
+        local char = target.Character
+        local targetPart = char:FindFirstChild(Config.AimPart)
+        
+        if targetPart then
+            local targetPos = targetPart.Position
             
-            local char = target.Character
-            local head = char:FindFirstChild("Head")
-            
-            if head then
-                local targetPos = head.Position
-                
-                -- Predição de movimento
-                if Config.Prediction then
-                    local velocity = head.AssemblyLinearVelocity
-                    targetPos = targetPos + (velocity * Config.PredictionStrength)
+            if Config.Prediction then
+                local velocity = targetPart.AssemblyLinearVelocity
+                if velocity then
+                    targetPos = targetPos + (velocity * Config.PredictionAmount)
                 end
-                
-                SmoothAimAt(targetPos)
             end
-        else
-            if Config.StickToTarget and State.CurrentTarget and IsAlive(State.CurrentTarget) then
-                -- Continuar grudado no alvo atual
-                local char = State.CurrentTarget.Character
-                if char then
-                    local head = char:FindFirstChild("Head")
-                    if head then
-                        local targetPos = head.Position
-                        
-                        if Config.Prediction then
-                            local velocity = head.AssemblyLinearVelocity
-                            targetPos = targetPos + (velocity * Config.PredictionStrength)
-                        end
-                        
-                        SmoothAimAt(targetPos)
-                    end
-                end
+            
+            local currentCFrame = Camera.CFrame
+            local targetCFrame = CFrame.new(currentCFrame.Position, targetPos)
+            
+            if Config.SmoothAim then
+                local smoothFactor = 1 / Config.Smoothness
+                Camera.CFrame = currentCFrame:Lerp(targetCFrame, smoothFactor)
             else
-                State.CurrentTarget = nil
+                Camera.CFrame = targetCFrame
             end
         end
+    else
+        State.CurrentTarget = nil
     end
 end
 
--- Loop do aimbot AUTOMÁTICO
-RunService.RenderStepped:Connect(function()
-    AimbotLoop()
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.UserInputType == Config.AimbotKey then
+        State.MouseDown = true
+    end
 end)
 
--- ==================== ESP BOX 2D SYSTEM ====================
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Config.AimbotKey then
+        State.MouseDown = false
+        State.CurrentTarget = nil
+    end
+end)
+
 local function CreateESPBox(player)
     if player == LocalPlayer then return end
     if State.ESPDrawings[player] then return end
     
     local drawings = {
-        -- BOX 2D (4 linhas)
         TopLine = Drawing.new("Line"),
         BottomLine = Drawing.new("Line"),
         LeftLine = Drawing.new("Line"),
         RightLine = Drawing.new("Line"),
-        
-        -- TRACER (linha conectando)
         Tracer = Drawing.new("Line"),
-        
-        -- TEXTOS
         NameText = Drawing.new("Text"),
         DistanceText = Drawing.new("Text"),
         HealthText = Drawing.new("Text"),
-        
-        -- BARRA DE VIDA
         HealthBarOutline = Drawing.new("Line"),
         HealthBarInside = Drawing.new("Line"),
     }
     
-    -- Configurar linhas da box
     for _, line in pairs({drawings.TopLine, drawings.BottomLine, drawings.LeftLine, drawings.RightLine}) do
         line.Thickness = Config.BoxThickness
         line.Color = Config.BoxColor
@@ -264,13 +219,11 @@ local function CreateESPBox(player)
         line.ZIndex = 2
     end
     
-    -- Configurar tracer
     drawings.Tracer.Thickness = 1
     drawings.Tracer.Color = Config.BoxColor
     drawings.Tracer.Visible = false
     drawings.Tracer.ZIndex = 1
     
-    -- Configurar textos
     for _, text in pairs({drawings.NameText, drawings.DistanceText, drawings.HealthText}) do
         text.Size = 13
         text.Center = true
@@ -282,7 +235,6 @@ local function CreateESPBox(player)
     
     drawings.NameText.Size = 14
     
-    -- Configurar barra de vida
     drawings.HealthBarOutline.Thickness = 3
     drawings.HealthBarOutline.Color = Color3.new(0, 0, 0)
     drawings.HealthBarOutline.Visible = false
@@ -297,11 +249,23 @@ local function CreateESPBox(player)
 end
 
 local function UpdateESP()
-    if not Config.ESPEnabled then return end
+    if not Config.ESPEnabled then 
+        for _, drawings in pairs(State.ESPDrawings) do
+            for _, drawing in pairs(drawings) do
+                drawing.Visible = false
+            end
+        end
+        return 
+    end
+    
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+    
+    local myPos = LocalPlayer.Character.HumanoidRootPart.Position
     
     for player, drawings in pairs(State.ESPDrawings) do
         if not IsAlive(player) or IsTeammate(player) then
-            -- Esconder tudo
             for _, drawing in pairs(drawings) do
                 drawing.Visible = false
             end
@@ -313,22 +277,22 @@ local function UpdateESP()
         local head = char:FindFirstChild("Head")
         local hum = char:FindFirstChildOfClass("Humanoid")
         
-        if not hrp or not head or not hum then continue end
-        
-        -- VERIFICAR DISTÂNCIA MÁXIMA DO ESP
-        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            local distance3D = (LocalPlayer.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
-            
-            if distance3D > Config.MaxESPDistance then
-                -- Esconder ESP se muito longe
-                for _, drawing in pairs(drawings) do
-                    drawing.Visible = false
-                end
-                continue
+        if not hrp or not head or not hum then 
+            for _, drawing in pairs(drawings) do
+                drawing.Visible = false
             end
+            continue 
         end
         
-        -- Calcular posição da box 2D
+        local distance = GetDistance(myPos, hrp.Position)
+        
+        if distance > Config.ESPMaxDistance then
+            for _, drawing in pairs(drawings) do
+                drawing.Visible = false
+            end
+            continue
+        end
+        
         local rootPos = hrp.Position
         local headPos = head.Position + Vector3.new(0, 0.5, 0)
         local legPos = rootPos - Vector3.new(0, 3, 0)
@@ -343,40 +307,33 @@ local function UpdateESP()
             continue
         end
         
-        -- Calcular tamanho da box
         local height = (bottomScreen - topScreen).Magnitude
         local width = height * 0.5
         
-        -- Atualizar cor baseado na vida
-        local healthPercent = hum.Health / hum.MaxHealth
+        local healthPercent = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
         local healthColor = Color3.new(1 - healthPercent, healthPercent, 0)
         
-        -- BOX 2D (4 linhas formando retângulo)
         if Config.ESPBoxes then
             local topLeft = Vector2.new(topScreen.X - width / 2, topScreen.Y)
             local topRight = Vector2.new(topScreen.X + width / 2, topScreen.Y)
             local bottomLeft = Vector2.new(bottomScreen.X - width / 2, bottomScreen.Y)
             local bottomRight = Vector2.new(bottomScreen.X + width / 2, bottomScreen.Y)
             
-            -- Linha de cima
             drawings.TopLine.From = topLeft
             drawings.TopLine.To = topRight
             drawings.TopLine.Color = Config.BoxColor
             drawings.TopLine.Visible = true
             
-            -- Linha de baixo
             drawings.BottomLine.From = bottomLeft
             drawings.BottomLine.To = bottomRight
             drawings.BottomLine.Color = Config.BoxColor
             drawings.BottomLine.Visible = true
             
-            -- Linha esquerda
             drawings.LeftLine.From = topLeft
             drawings.LeftLine.To = bottomLeft
             drawings.LeftLine.Color = Config.BoxColor
             drawings.LeftLine.Visible = true
             
-            -- Linha direita
             drawings.RightLine.From = topRight
             drawings.RightLine.To = bottomRight
             drawings.RightLine.Color = Config.BoxColor
@@ -388,7 +345,6 @@ local function UpdateESP()
             drawings.RightLine.Visible = false
         end
         
-        -- TRACER (linha conectando)
         if Config.ESPTracers then
             local tracerStart
             local screenSize = Camera.ViewportSize
@@ -397,7 +353,7 @@ local function UpdateESP()
                 tracerStart = Vector2.new(screenSize.X / 2, screenSize.Y)
             elseif Config.TracerOrigin == "Middle" then
                 tracerStart = Vector2.new(screenSize.X / 2, screenSize.Y / 2)
-            else -- Top
+            else
                 tracerStart = Vector2.new(screenSize.X / 2, 0)
             end
             
@@ -409,7 +365,6 @@ local function UpdateESP()
             drawings.Tracer.Visible = false
         end
         
-        -- NOME
         if Config.ESPNames then
             drawings.NameText.Text = player.Name
             drawings.NameText.Position = Vector2.new(topScreen.X, topScreen.Y - 18)
@@ -418,9 +373,8 @@ local function UpdateESP()
             drawings.NameText.Visible = false
         end
         
-        -- DISTÂNCIA
-        if Config.ESPDistance and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            local dist = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - hrp.Position).Magnitude)
+        if Config.ESPDistance then
+            local dist = math.floor(distance)
             drawings.DistanceText.Text = tostring(dist) .. "m"
             drawings.DistanceText.Position = Vector2.new(bottomScreen.X, bottomScreen.Y + 5)
             drawings.DistanceText.Visible = true
@@ -428,7 +382,6 @@ local function UpdateESP()
             drawings.DistanceText.Visible = false
         end
         
-        -- VIDA (TEXTO)
         if Config.ESPHealth then
             local health = math.floor(hum.Health)
             drawings.HealthText.Text = tostring(health) .. " HP"
@@ -439,19 +392,15 @@ local function UpdateESP()
             drawings.HealthText.Visible = false
         end
         
-        -- BARRA DE VIDA
         if Config.ESPHealthBar then
             local barWidth = width
-            local barHeight = 4
             local barX = topScreen.X - barWidth / 2
             local barY = topScreen.Y - 25
             
-            -- Outline (fundo preto)
             drawings.HealthBarOutline.From = Vector2.new(barX, barY)
             drawings.HealthBarOutline.To = Vector2.new(barX + barWidth, barY)
             drawings.HealthBarOutline.Visible = true
             
-            -- Inside (barra colorida)
             local healthBarWidth = barWidth * healthPercent
             drawings.HealthBarInside.From = Vector2.new(barX, barY)
             drawings.HealthBarInside.To = Vector2.new(barX + healthBarWidth, barY)
@@ -464,7 +413,6 @@ local function UpdateESP()
     end
 end
 
--- Criar ESP para todos os jogadores
 local function InitESP()
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -480,31 +428,18 @@ local function InitESP()
     Players.PlayerRemoving:Connect(function(player)
         if State.ESPDrawings[player] then
             for _, drawing in pairs(State.ESPDrawings[player]) do
-                drawing:Remove()
+                pcall(function() drawing:Remove() end)
             end
             State.ESPDrawings[player] = nil
         end
     end)
-    
-    -- Update loop
-    RunService.RenderStepped:Connect(function()
-        if Config.ESPEnabled then
-            UpdateESP()
-        else
-            for _, drawings in pairs(State.ESPDrawings) do
-                for _, drawing in pairs(drawings) do
-                    drawing.Visible = false
-                end
-            end
-        end
-    end)
 end
 
--- ==================== GUI MODERNA ====================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "FPSPanelPRO"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
 
 pcall(function()
     ScreenGui.Parent = game:GetService("CoreGui")
@@ -514,7 +449,6 @@ if not ScreenGui.Parent then
     ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 end
 
--- BOTÃO FLUTUANTE
 local OpenButton = Instance.new("TextButton")
 OpenButton.Size = UDim2.new(0, 70, 0, 70)
 OpenButton.Position = UDim2.new(0, 15, 0.5, -35)
@@ -538,10 +472,9 @@ OpenStroke.Color = Color3.new(1, 1, 1)
 OpenStroke.Thickness = 3
 OpenStroke.Parent = OpenButton
 
--- PAINEL PRINCIPAL
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 480, 0, 650)
-MainFrame.Position = UDim2.new(0.5, -240, 0.5, -325)
+MainFrame.Size = UDim2.new(0, 480, 0, 700)
+MainFrame.Position = UDim2.new(0.5, -240, 0.5, -350)
 MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 25)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -558,7 +491,6 @@ MainStroke.Color = Color3.fromRGB(220, 50, 80)
 MainStroke.Thickness = 3
 MainStroke.Parent = MainFrame
 
--- HEADER
 local Header = Instance.new("Frame")
 Header.Size = UDim2.new(1, 0, 0, 60)
 Header.BackgroundColor3 = Color3.fromRGB(220, 50, 80)
@@ -603,7 +535,6 @@ OpenButton.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
 end)
 
--- CONTENT
 local Content = Instance.new("ScrollingFrame")
 Content.Size = UDim2.new(1, -20, 1, -80)
 Content.Position = UDim2.new(0, 10, 0, 70)
@@ -761,8 +692,10 @@ local function CreateSlider(text, min, max, default, callback)
                 finalValue = math.floor(finalValue * 100) / 100
             elseif max <= 10 then
                 finalValue = math.floor(finalValue * 10) / 10
-            else
+            elseif max <= 100 then
                 finalValue = math.floor(finalValue)
+            else
+                finalValue = math.floor(finalValue / 10) * 10
             end
             
             Fill.Size = UDim2.new(value, 0, 1, 0)
@@ -775,35 +708,30 @@ local function CreateSlider(text, min, max, default, callback)
     yPos = yPos + 80
 end
 
--- CRIAR INTERFACE
-CreateSection("🎯 AIMBOT AUTOMÁTICO")
+CreateSection("🎯 AIMBOT FREE FIRE")
 
 CreateToggle("Aimbot Ativado", true, function(state)
     Config.AimbotEnabled = state
 end)
 
-CreateToggle("Auto Aim (Não precisa clicar!)", true, function(state)
-    Config.AutoAim = state
-end)
-
-CreateToggle("Smooth Aim (Suave)", true, function(state)
+CreateToggle("Smooth Aim", true, function(state)
     Config.SmoothAim = state
 end)
 
-CreateSlider("Suavidade", 0.1, 1.0, 0.25, function(value)
+CreateSlider("Suavidade", 1, 20, 8, function(value)
     Config.Smoothness = value
 end)
 
-CreateSlider("Tamanho FOV", 50, 500, 200, function(value)
+CreateSlider("Alcance Aimbot (studs)", 100, 2000, 500, function(value)
+    Config.AimbotMaxDistance = value
+end)
+
+CreateSlider("Tamanho FOV", 50, 500, 150, function(value)
     Config.FOVSize = value
 end)
 
 CreateToggle("Mostrar FOV Circle", true, function(state)
     Config.FOVVisible = state
-end)
-
-CreateToggle("Continuar Grudado no Alvo", true, function(state)
-    Config.StickToTarget = state
 end)
 
 CreateToggle("Team Check", true, function(state)
@@ -814,12 +742,12 @@ CreateToggle("Wall Check", false, function(state)
     Config.WallCheck = state
 end)
 
-CreateToggle("Predição Movimento", true, function(state)
+CreateToggle("Predição", true, function(state)
     Config.Prediction = state
 end)
 
-CreateSlider("Força da Predição", 0.05, 0.3, 0.12, function(value)
-    Config.PredictionStrength = value
+CreateSlider("Força Predição", 0.05, 0.3, 0.165, function(value)
+    Config.PredictionAmount = value
 end)
 
 CreateSection("👁️ ESP BOX 2D")
@@ -828,23 +756,27 @@ CreateToggle("ESP Ativado", true, function(state)
     Config.ESPEnabled = state
 end)
 
+CreateSlider("Alcance ESP (studs)", 100, 5000, 1000, function(value)
+    Config.ESPMaxDistance = value
+end)
+
 CreateToggle("Boxes 2D", true, function(state)
     Config.ESPBoxes = state
 end)
 
-CreateToggle("Linhas Tracejadas", true, function(state)
+CreateToggle("Tracers", true, function(state)
     Config.ESPTracers = state
 end)
 
-CreateToggle("Mostrar Nomes", true, function(state)
+CreateToggle("Nomes", true, function(state)
     Config.ESPNames = state
 end)
 
-CreateToggle("Mostrar Distância", true, function(state)
+CreateToggle("Distância", true, function(state)
     Config.ESPDistance = state
 end)
 
-CreateToggle("Mostrar Vida", true, function(state)
+CreateToggle("Vida", true, function(state)
     Config.ESPHealth = state
 end)
 
@@ -858,11 +790,26 @@ end)
 
 Content.CanvasSize = UDim2.new(0, 0, 0, yPos + 10)
 
--- INICIAR TUDO
-CreateFOVCircle()
 InitESP()
 
--- ATALHOS
+RunService.RenderStepped:Connect(function()
+    local mousePos = UserInputService:GetMouseLocation()
+    FOVCircle.Position = mousePos
+    FOVCircle.Radius = Config.FOVSize
+    FOVCircle.Visible = Config.FOVVisible and Config.AimbotEnabled
+    
+    if State.MouseDown and State.CurrentTarget then
+        FOVCircle.Color = Color3.new(0, 1, 0)
+        FOVCircle.Thickness = 3
+    else
+        FOVCircle.Color = Color3.new(1, 1, 1)
+        FOVCircle.Thickness = 2
+    end
+    
+    AimbotLogic()
+    UpdateESP()
+end)
+
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     
@@ -872,45 +819,16 @@ UserInputService.InputBegan:Connect(function(input, processed)
 end)
 
 print([[
-╔═══════════════════════════════════════════╗
-║      🎯 FPS PANEL PRO CARREGADO!         ║
-╚═══════════════════════════════════════════╝
+✅ FPS PANEL PRO - ALCANCE CONFIGURÁVEL
 
-✅ AIMBOT AUTOMÁTICO!
-   → NÃO PRECISA APERTAR NADA!
-   → Só mire PERTO do inimigo
-   → Ele GRUDA SOZINHO na cabeça
-   → FOV Circle: Branco = buscando, Verde = travado
+🎯 AIMBOT:
+• Alcance padrão: 500 studs (ajustável 100-2000)
+• Segure BOTÃO DIREITO DO MOUSE
+• FOV segue o cursor
 
-✅ ESP BOX 2D COMPLETO!
-   → Boxes 2D (linhas ao redor)
-   → Linhas tracejadas conectando você
-   → Nome + Distância + Vida
-   → Barra de vida colorida
+👁️ ESP:
+• Alcance padrão: 1000 studs (ajustável 100-5000)
+• Mostra apenas jogadores dentro do alcance
 
-🎮 CONTROLES:
-   • Botão 🎯 vermelho = Abrir/Fechar
-   • INSERT = Abrir/Fechar
-   • Arraste o 🎯 = Mover botão
-
-⚙️ CONFIGURAÇÕES RECOMENDADAS:
-   • Smoothness: 0.25 (rápido mas suave)
-   • FOV: 200-300 pixels (médio/grande)
-   • Auto Aim: ON (automático)
-   • Stick to Target: ON (continua grudado)
-
-💡 COMO FUNCIONA:
-   1. Aponte PERTO de um inimigo
-   2. Se ele estiver DENTRO do FOV Circle
-   3. A mira GRUDA SOZINHA na cabeça
-   4. Continua grudado enquanto ele estiver no FOV
-
-🎯 AJUSTES:
-   • Muito lento? Aumente Smoothness
-   • Muito rápido? Diminua Smoothness
-   • FOV pequeno? Aumente FOV Size
-
-🔥 AGORA É AUTOMÁTICO!
-   Não precisa apertar NADA!
-   Só mire perto e ele gruda!
+🎮 Tecla INSERT = Menu
 ]])
