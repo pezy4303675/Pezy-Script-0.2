@@ -34,7 +34,7 @@ local Config = {
         FOVColor = Color3.fromRGB(255, 255, 255),
         Smoothness = 0.3,
         TargetPart = "Head",
-        TeamCheck = true,
+        TeamCheck = false,
         VisibleCheck = false,
         MaxDistance = 500
     },
@@ -309,16 +309,6 @@ local function UpdateESP()
                 local humanoid = player.Character.Humanoid
                 
                 if not hrp or not humanoid then return end
-                
-                if Config.Aimbot.TeamCheck and player.Team == LocalPlayer.Team and player.Team ~= nil then
-                    esp.Box.Visible = false
-                    esp.HealthBar.Visible = false
-                    esp.HealthBarBg.Visible = false
-                    esp.NameText.Visible = false
-                    esp.DistanceText.Visible = false
-                    esp.TracerLine.Visible = false
-                    return
-                end
                 
                 local distance = (myPos - hrp.Position).Magnitude
                 
